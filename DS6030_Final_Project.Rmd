@@ -1,0 +1,796 @@
+---
+title: "Final_project"
+author: "Levi Davis, Brennan Danek, Gunnar Franko, Devin McDonald"
+date: "2022-12-12"
+output:
+  html_document:
+    theme: yeti
+    toc: TRUE
+    toc_float: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+# Introduction
+
+Welcome to our Natural Language Processing tutorial!
+
+High-level overview:
+
+-   Create an environment to use R AND python in the the SAME RMarkdown!
+
+-   Access the Genius API to easily create custom dataset
+
+-   Overview of Natural Language Processing
+
+-   Text Pre-processing and formatting
+
+-   Sentiment analysis
+
+-   Topic modeling (bag of words): Latent Dirichlet Allocation
+
+-   BERTopic advanced models
+
+```{r}
+#install.packages('reticulate')
+#install.packages('dotenv')
+library("reticulate")     # Incorporates python code
+#install_miniconda()
+library('dotenv') # Uses .env files to hide sensitive information; i.e. access codes
+```
+
+More info about using .env files: <https://medium.com/towards-data-science/using-dotenv-to-hide-sensitive-information-in-r-8b878fa72020>
+
+# Configure Environment
+
+-   For the first part of this tutorial we use the reticulate package to set up a special environment to which we can install python packages. This allows us to use both R AND python code within the same RMarkdown document.
+
+-   It's also possible to incorporate python classes into RMarkdown: <http://theautomatic.net/2020/01/14/how-to-import-python-classes-into-r/>
+
+The following descriptions are from the reticulate github repo: <https://rstudio.github.io/reticulate/>
+
+-   The reticulate package includes a Python engine for R Markdown with the following features
+-   Run Python chunks in a single Python session embedded within your R session (shared variables/state between Python chunks)
+-   Printing of Python output, including graphical output from matplotlib. -
+-   Access to objects created within Python chunks from R using the py object (e.g. py\$x would access an x variable created within Python from R).
+-   Access to objects created within R chunks from Python using the r object (e.g. r.x would access to x variable created within R from Python)
+-   Using virtualenvs is supported on Linux and Mac OS X, using Conda environments is supported on all platforms including Windows
+
+Create a conda environment to load python packages
+
+-   conda_list() List all available conda environments
+-   conda_create() Create a new conda environment
+-   conda_install() Install a package within a conda environment
+-   conda_remove() Remove individual packages or an entire conda environment
+
+Disclaimer: This code below using reticulate 'should' run without much issue on a Windows PC, but Mac OS and Linux may have unforeseen difficulties. Check dependencies, etc.; good luck!
+
+```{r}
+# Initial installation code to the environment
+# This chunk should take a couple minutes to install
+
+# conda_create('r-reticulate')
+# 
+# # Use pip=T for non-conda packages
+# conda_install('r-reticulate',"scikit-learn")
+# conda_install('r-reticulate',"lyricsgenius", pip=T)   
+# conda_install('r-reticulate',"contractions", pip=T)
+# conda_install('r-reticulate',"nltk")
+# conda_install('r-reticulate',"numpy")
+# conda_install('r-reticulate',"pandas")
+# conda_install('r-reticulate','gensim')
+# conda_install('r-reticulate','python-flair')
+# conda_install('r-reticulate', 'BERTopic')
+# conda_install('r-reticulate', 'plotly')
+```
+
+Note: Install scikit-learn but then import sklearn
+
+```{r}
+use_condaenv("r-reticulate") # Loads a pre-existing conda environment
+
+#Imports python packages into the environment
+import('sklearn')         # Comprehensive machine learning toolkit
+import('lyricsgenius')    # access the Genius API
+import("nltk")            # Natural language toolkit
+import('contractions')    # expands contractions 
+import('gensim')          # Topic modeling for language 
+import('flair')           # State-of-the-Art NLP techniques
+import('bertopic')        # Advanced topic modeling
+import('numpy')           # duh
+import('pandas')          # duh
+import('plotly')
+```
+
+# Creating Music Datasets
+
+Using the lyricsgenius package we can easily access the Genius api, and with a couple of functions provided below we can have freedom to create datasets of the Genius Top charts with one line of code.
+
+Note: Additional functions and instructions provided at the end of the tutorial
+
+Some setup code
+
+```{r}
+path <- getwd()       # current working directory
+load_dot_env("tokens.env")      # Access hidden .env file
+client_access_token <- Sys.getenv("client_access_token") # get access code
+```
+
+Note: If you get "Warning: incomplete final line found on 'tokens.env'", try hitting enter at the end of your .env file
+
+Switching to python code
+
+```{python, results='asis'}
+# ^^^ observe
+import sklearn
+import lyricsgenius
+import nltk
+import pandas as pd
+import numpy as np
+# Able to directly load base python packages  
+import os
+
+genius = lyricsgenius.Genius(r.client_access_token) # Genius API agent
+```
+
+## Functions to Create Datasets
+
+```{python}
+def top_charts(time_period='all_time',genre='all_time',
+                    n_per_page=50,type_='songs',pages=1):
+  
+#  Purpose: Access the topcharts Genius API to create a dataset
+#    - Results vary, but size is less than 200
+#    - Used in conjunction with song_info function
+#  Input:
+#    - tp: time period ‘day’, ‘week’, ‘month’ or ‘all_time’
+#    - genre: ‘all’, ‘rap’, ‘pop’, ‘rb’, ‘rock’ or ‘country’
+#    - per_page: 1 - 50
+#    - type_: item type: ‘songs’, ‘albums’, or ‘artists’
+#    - page: number of page number
+# Output: 
+#   dataframe of song ids, titles, artist, and lyrics
+
+
+  song_ids = list() # Lists to add to output data frame 
+ 
+ # while-try loop because the request sometimes times out and will kill the loop
+  for pn in range(1,pages+1):
+      t = True
+      while t == True:
+          try:
+              songs = genius.charts(page=pn,time_period=time_period,
+                              chart_genre=genre,per_page=n_per_page,type_=type_)
+          except:    
+              pass
+          else:
+              t = False
+              n = len(songs['chart_items'])  # number of hits
+              # get song ids
+              for song in range(0,n):
+                  language = songs['chart_items'][song]['item']['language']
+                  if language == 'en':
+                      song_id = songs['chart_items'][song]['item']['api_path'].replace('/songs/','')
+                      song_ids.append(song_id)
+                      
+  # call song_info function to retrieve lyrics
+  topchart_df = song_info(song_ids) 
+  
+  # option to save the dataframe as a csv file
+  path = os.getcwd()
+  csv_name = 'topchart_'+time_period+'_'+type_+'_'+genre+'.csv'
+  #song_df.to_csv(path+csv_name, index=False)
+  
+  return topchart_df
+```
+
+```{python}
+def song_info(ids,time_period='all_time',genre='all',type_='songs'):
+  
+  # Input: list of song ids
+  # Output: dataframe with song ids, artist names, lyrics, song titles.
+
+  try:
+      type(ids) == list
+  except:
+      print('input needs to be a list')
+  lyrics = list()         
+  titles = list()         
+  artists = list()
+  bad_song_ids = list()
+  song_ids = ids
+  
+  # Access Genius API for each song_id
+  # The try/except/pass code is to protect the dataset creation from being
+  # terminated if there is a problem with any API call, and sometimes the Genius
+  # API for 
+  for song in song_ids:
+    t = True
+    while t == True:
+        try:
+            a = genius.search_song(song_id=song)
+        except:    
+            pass
+        else:
+            t = False
+            if (a!=None) and (a.to_text()!=None):
+                lyrics.append(a.to_text())
+                titles.append(a.title)
+                artists.append(a.artist)
+            else:
+                bad_song_ids.append(song)
+                
+  # Eliminate corrupt songs
+  song_ids = [x for x in song_ids if x not in bad_song_ids] 
+  
+  # output data frame                                   
+  song_df = pd.DataFrame({
+      'title': titles,
+      'lyrics': lyrics,
+      'artist': artists,
+      'song_ids': song_ids,})
+  
+  return song_df
+```
+
+## Example Dataset Creation Code
+
+```{python}
+# dataset1 = top_charts(genre='country',n_per_page=50, pages=1, 
+#        type_='songs',time_period='all_time')
+```
+
+Dataset options:
+
+-   genre: rap, rock, pop, rb (r&b), country, or all
+-   type: songs, albums, or artists
+-   time period: day, week, month, or all_time
+
+Note: The repeated calling of Genius API will (rarely) cause the automated functions to terminate, even with the try/expect/pass code, but it should work if you retry one or two more times.
+
+Caveat: Some songs may appear twice with different versions (remix, acoustic). We decided not to remove duplicates because duplicate versions both appearing in top charts shows just how popular the song is.
+
+## Load previously created datasets
+
+Here I load previously created datasets that were created with the same functions above
+
+```{python}
+path = os.getcwd()
+
+path_rap = path+'/topchart_all_time_songs_rap.csv'
+rap_df = pd.read_csv(path_rap, index_col=False)
+
+path_rock = path+'/topchart_all_time_songs_rock.csv'
+rock_df = pd.read_csv(path_rock, index_col=False)
+
+path_pop = path+'/topchart_all_time_songs_pop.csv'
+pop_df = pd.read_csv(path_pop, index_col=False)
+
+path_rb = path+'/topchart_all_time_songs_rb.csv'
+rb_df = pd.read_csv(path_rb, index_col=False)
+
+path_country = path+'/topchart_all_time_songs_country.csv'
+country_df = pd.read_csv(path_country, index_col=False)
+
+dfs = [rap_df,rock_df,  pop_df, rb_df, country_df]
+full_df = pd.concat(dfs)
+```
+
+# Pre-processing
+
+## Pre-processing Description
+
+Before we can analyze our data, we must pre-process our text, as one would do for any Natural Language Processing. The main pre-processing steps we will focus on are data cleaning, tokenization, removing stop words, and normalization/lemmatization.
+
+The first step is to clean our data of any unintended characters or symbols present in our text. As our data comes from using the package 'lyricgenius' to access the Genius API, there are many characters present in our text that we would wish to have removed. We can use regular expressions to search for these characters or groups of characters and remove them from our data.
+
+Our next step is to tokenize our data. In NLP tokenizing is the process of turning unstructured data into discrete, usable units that we will use for our natural language processing. There are various forms of tokenizing, but we will use word tokenizing for our problem. This will split up our data, in this case the lyrics to each song, into separate units for each word in the lyrics. This unit, word, is what the natural language processing will use to analyze (as opposed to using words + common phrases or advanced modeling techniques that consider the ordered sequence of words like transformer models. Another common tokenizer used is sentence tokenization, which splits up the data by sentence.
+
+Once our data is tokenized, we can remove stop words from our data. Stop words are common words that are not useful in NLP. Think words like 'the', 'and', or 'an'. We remove these words before processing because they would serve little value in helping us classify our songs, and could even have significant negative impacts on our analysis by diluting the relevant words in data. We use the nltk library's default stopwords, as well as a few more that are common in song lyrics. Additionally, we have included explicit words as stopwords, as we would rather not use these words to classify our genres.
+
+Finally, we must normalize our text in some way. The two most common forms of text normalization are stemming and lemmatization. Stemming is a "heuristic" based approach that removes common ends to words, leaving just the "stems" remaining, e.g. boats, boatness -\> boat. Lemmatizing, on the other hand, applies a "morphological" analysis of each word to determine the base, or "lemma", of the word, e.g. mice -\> mouse. Lemmatization is typically preferred to stemming, as it provides a more complex analysis of the true meaning of each word, and so we will use it in our analysis.
+
+-   <https://nlp.stanford.edu/IR-book/html/htmledition/stemming-and-lemmatization-1.html>
+-   <https://nlp.stanford.edu/IR-book/html/htmledition/dropping-common-terms-stop-words-1.html>
+-   <https://neptune.ai/blog/tokenization-in-nlp>
+-   <https://towardsdatascience.com/preprocessing-text-data-using-python-576206753c28>
+
+## Pre-processing Code
+
+```{python}
+import re             # python regular expressions
+import copy
+import contractions
+import nltk
+#nltk.download('wordnet')
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk.stem import SnowballStemmer
+```
+
+```{python}
+def process_text(df):
+  
+  # Performs various text pre-processing steps
+  # Input: Data frame with a column named 'lyrics'
+  # Output: Same dataframe but with pre-processed text
+  
+  df1 = copy.deepcopy(df)
+  lyrics = df1.lyrics
+  lyrics_final = list()
+  
+  snow_stemmer = SnowballStemmer(language='english')
+  wnl = WordNetLemmatizer()
+  
+  for lyric in lyrics:
+    # Removes brackets and text inside
+    song_lyrics = re.sub(r'\[.*?\]', '', lyric)      
+    # Removes parentheses and text inside
+    song_lyrics = re.sub(r'\(.*?\)', '',song_lyrics)    
+    # Finds start of lyrics
+    song_lyrics = song_lyrics[song_lyrics.find('Lyrics')+6:] 
+    # Removes newlin char (\n)
+    song_lyrics = re.sub("\n"," ",song_lyrics)          
+    # Removes leftover backslahes 
+    song_lyrics = re.sub('\'', "plac3h0ler",song_lyrics)    
+    # Removes leftover backslahes 
+    song_lyrics = re.sub('plac3h0ler', r"'",song_lyrics)  
+    # Removes text at the end of doc
+    song_lyrics = re.sub(".{3}Embed", "",song_lyrics)         
+    # Lengthes contractions to full form
+    song_lyrics = contractions.fix(song_lyrics)               
+    # Removes punctuation
+    song_lyrics = re.sub(r'[^\w\s]','',song_lyrics)   
+    # Removes numbers
+    song_lyrics = re.sub("[^a-zA-Z]+", " ",song_lyrics)  
+    # Tokenize words
+    word_tokens = word_tokenize(song_lyrics)
+    # Lemmatize words
+    lemma_words_tokens = [wnl.lemmatize(token) for token in word_tokens]    
+    
+    # stopwords 
+    stop_words = stopwords.words('english')  
+    sw = ['ayy', 'like', 'come', 'yeah', 'got', 'la', 'ya',
+          'oh', 'ooh', 'huh', 'whooaaaaa', 'o', 'n', 'x']
+    explict_words = ['nigga', 'nigger', 'bitch', 'bitchin', 'fag', 'faggot',
+                     'fuck', 'fucked', 'fuckin', 'motherfucker', 'motherfuckin',
+                     'pussy', 'dick', 'cock', 'whore','shit', 'shittin']
+    stop_words_final = stop_words + sw + explict_words
+    
+    # Remove stopwords
+    filtered_lyrics = [token.lower() for token in lemma_words_tokens if 
+              token.lower() not in stop_words_final] 
+    
+    # Join lyrics into one string
+    lyrics_joined = ' '.join(filtered_lyrics).lower()
+    
+    lyrics_final.append(lyrics_joined)
+  
+  df1 = df1.drop(['lyrics'], axis=1)
+  df1['lyrics'] = lyrics_final
+  
+  return df1
+```
+
+Apply pre-processing to datasets
+
+```{python}
+cleaned_full_df = process_text(full_df)
+cleaned_rap_df = process_text(rap_df)
+cleaned_rock_df = process_text(rock_df)
+cleaned_pop_df = process_text(pop_df)
+cleaned_rb_df = process_text(rb_df)
+cleaned_country_df = process_text(country_df)
+pd.set_option('display.max_columns', None)
+print(cleaned_full_df.head())
+```
+
+# Text Analysis
+
+Now that we have finished the 'setup' part we can finally get into the fun stuff
+
+Natural language processing seeks to translate human language, like text or speech, to comprehensible and analyzable pieces for learning machines. NLP has common applications such as speech recognition, topic extraction, name-entity recognition, and sentiment analysis. The abundance of text data readily available has made natural language processing a growing field.
+
+We will take a look at 2 main uses for natural language processing: Sentiment Analysis and Topic Modeling. Sentiment Analysis is used to determine the emotional sentiment around text, typically used to analyze reviews. Topic Modeling is an unsupervised machine learning technique aimed at classifying different documents into topics based on the words within each document. Both of these techniques have applications to our lyrics data, as we will be able to identify the sentiment of songs, as well as find possible topics among the songs.
+
+-   <https://www.sas.com/en_us/insights/analytics/what-is-natural-language-processing-nlp.html>
+-   <https://www.ibm.com/cloud/learn/natural-language-processing#toc-what-is-na-jLju4DjE>
+
+## Sentiment Analysis
+
+### Sentiment Analysis Description
+
+Sentiment Analysis is a multinomial text classification where the emotional weight of the text (positive, neutral, negative) is calculated using natural language processing. Sentiment analysis has many applications, especially in analyzing reviews, surveys, and media. There are 2 major types of sentiment analysis: rule-based and embedding based.
+
+Rule-based is the simpler approach, does not leverage machine learning, and bases its calculations on known datasets of words. This means that rule-based sentiment analysis could indicate which songs are negative if they use a common word like "sad", but terms unfamiliar to a rule-based sentiment analysis library would be ignored and would not be able to be predicted. It also is unable to understand the context in which words are used, meaning that homonyms, often pop culture homonyms in the context of song lyrics, can only be interpreted one way with this approach.
+
+Embedding based sentiment analysis, on the other hand, forms vector representations of words, where similar words are dimensionally similar. These vector representations can also be added together to represent the word combinations e.g. king + woman = queen. More info: <https://neptune.ai/blog/sentiment-analysis-python-textblob-vs-vader-vs-flair>
+
+For our analysis, we will be using the Flair library, and their pre-trained sentiment analysis on an IMDB dataset. This library is especially advanced due to the type of embedding sentiment analysis it uses. Flair uses contextual string embeddings to determine the sentiment of words. This treats words as characters, and uses character language models as well as the embeddings of the surrounding text/characters to determine the word's embedding. In practice, this means that words can be given different embeddings, or meanings, depending on the context. In our example, this means that words can be seen as positive or negative depending on the surrounding lyrics.
+
+It should be noted that this sentiment analysis is trained on an IMDB dataset. For that reason, it may not produce the most accurate analysis and understanding of our words. To take this method one step further - if you have a big enough set - you can train your own sentiment analysis model using this package to create a model specified to the problem.
+
+-   Flair example: <https://christineeeeee.com/posts/nlp_sentiment_tool/>
+
+Copied from the flair github repo: <https://github.com/flairNLP/flair>
+
+A powerful NLP library. Flair allows you to apply our state-of-the-art natural language processing (NLP) models to your text, such as named entity recognition (NER), part-of-speech tagging (PoS), special support for biomedical data, sense disambiguation and classification, with support for a rapidly growing number of languages.
+
+A text embedding library. Flair has simple interfaces that allow you to use and combine different word and document embeddings, including our proposed Flair embeddings, BERT embeddings and ELMo embeddings.
+
+A PyTorch NLP framework. Our framework builds directly on PyTorch, making it easy to train your own models and experiment with new approaches using Flair embeddings and classes.
+
+### Sentiment Analysis Code
+
+```{python}
+from flair.models import TextClassifier
+from flair.data import Sentence
+
+# This is the pre-built model and will take awhile to download
+classifier = TextClassifier.load('en-sentiment') 
+
+def sentiment(df):
+  
+  # Performs sentiment analysis on a text data
+  # Input: dataframe with a column named 'lyrics' for text data
+  # Output: 
+  #       Original dataframe with sentiment scores of individual songs  (dataframe)
+  #       summary statistics of scores per genre (float)
+  
+  return_df = df
+  song_scores = []
+  lyrics = df.lyrics.tolist()
+  # Sums each songs sentiment score to gte an dataset average sentiment score 
+  sum_ = 0  
+  
+  for lyric in lyrics:
+    sentence = Sentence(lyric)
+    classifier.predict(sentence)
+    text = str(sentence.labels)
+    song_scores.append(text.split('/')[1])
+    score = text.split('/')[1]
+    num = float(score.split('(')[1].split(')')[0])
+    if score.__contains__("NEGATIVE"):
+      num = num * -1
+    sum_ += num
+    
+  return_df['Sentiment_score'] = pd.Series(song_scores)
+  
+  return return_df, sum_
+```
+
+```{python}
+sent_df_rap, avg_scr_rap = sentiment(cleaned_rap_df)
+print('rap genre: ', round(avg_scr_rap, 4), '\n\n' 'Song scores: ', sent_df_rap.head(10))
+```
+
+Only showing one output
+
+```{python, eval=FALSE}
+sent_df_rock, avg_scr_rock = sentiment(cleaned_rock_df)
+print('rock genre: ', round(avg_scr_rock, 4), '\n\n' 'Song scores: ', sent_df_rock.head(10))
+
+```
+
+```{python, eval=FALSE}
+sent_df_pop, avg_scr_pop = sentiment(cleaned_pop_df)
+print('pop genre: ', round(avg_scr_pop, 4), '\n\n' 'Song scores: ', sent_df_pop.head(10))
+```
+
+```{python, eval=FALSE}
+sent_df_rb, avg_scr_rb = sentiment(cleaned_rb_df)
+print('rb genre: ', round(avg_scr_rb, 4), '\n\n' 'Song scores: ', sent_df_rb.head(10))
+```
+
+```{python, eval=FALSE}
+sent_df_country, avg_scr_country = sentiment(cleaned_country_df)
+print('country genre: ', round(avg_scr_country, 4), '\n\n' 'Song scores: ', sent_df_country.head(10))
+```
+
+# Topic Modeling
+
+## Latent Dirichlet Allocation (LDA)
+
+### LDA Description
+
+Latent Dirichlet Allocation is an approach to topic modeling. The goal of LDA is to discover hidden, or latent, topics within a set of documents housing text. In the context of our example, documents will represent songs, and text will represent the lyrics. Let's assume we have K latent topics we are hoping to discover. In LDA, documents can be viewed as k-nomial distributions, where the distribution of k latent topics in each document is the probability of that document being from each latent topic. Our k latent topics as well can be viewed as distributions of each word being used in each topic. These two distributions can be estimated through an iterative process to create latent topics where suitable words and documents are grouped together, creating topics grouped by words, and documents given suitable topics based on those words.
+
+LDA starts by assigning random topics to each word in each document. Then, the algorithm selects one word to update its topic classification. With the aforementioned distributions, the algorithm calculates the probability of each topic given the document (found by taking the counts of all the topics for all the other words in the document) and the probability of each word for each topic (found by taking the counts of each word with each topic across all documents) and multiplies them to find the probability that each topic generated that word. We then pick the most likely topic and assign the word that new topic. This process is repeated for all words in all documents, and then iterated over to reach a steady state of latent topics.
+
+Through each iteration, topic classifications are made based upon how well a word fits a topic, and how well that topic fits the document. Because initial assignments are random, our topic distributions will do a poor job at assigning words new topics, but eventually suitable words and topics will be paired together through the topic assignments. This will create a topic classification distribution for every document, as well as generating sets of common words for topics.
+
+Below is a graphical model representing the Latent Dirichlet Allocation we are performing. Without getting into all of the details, you can see what variables are what and understand how each part is estimated
+
+![Θ: Topic mixes for each document \n 
+Z: Topic assignment for each word \n 
+W: word in each document \n
+β: distribution of words for each topic \n
+N: Number of words \n
+M: Number of documents \n
+𝜶: distribution of topics in documents \n
+𝜂: distribution of words in topics
+](/Users/Brennan/Downloads/Blei_et_al_fig1.jpg)
+
+-   <https://www.machinelearningplus.com/nlp/topic-modeling-gensim-python/#12buildingthetopicmodel>
+
+-   <https://highdemandskills.com/topic-modeling-intuitive/>
+
+-   Note: For this tutorial we use datasets with 118-198 observations, combined in a full dataset with 896 observations. However; "You should use at least 1,000 documents in each topic modeling job. Each document should be at least 3 sentences long. If a document consists of mostly numeric data, you should remove it from the corpus." - From <https://docs.aws.amazon.com/comprehend/latest/dg/topic-modeling.html>
+
+### LDA Code
+
+```{python}
+import gensim
+import gensim.corpora as corpora
+from gensim.utils import simple_preprocess
+from gensim.models import CoherenceModel
+```
+
+LDA coherence: <https://rare-technologies.com/what-is-topic-coherence/>
+
+```{python}
+def LDA_topics(df = cleaned_full_df,n_topics=10,top_n_words=15):
+  
+  # Split song lyrics into individual strings
+  sep_lyrics_list = []
+  for song in df.lyrics:
+    sep_lyrics = song.split()
+    sep_lyrics_list.append(sep_lyrics)
+  
+  # Bigram model --  two words frequently occurring together in a song
+  bigram_init = gensim.models.Phrases(sep_lyrics_list)
+  bigram_model = gensim.models.phrases.Phraser(bigram_init)
+  lyrics_bigrams = [bigram_model[lyric] for lyric in sep_lyrics_list]
+  
+  # Create corpus dictionary
+  id2word = corpora.Dictionary(lyrics_bigrams)
+  
+  # Term frequency
+  corpus = [id2word.doc2bow(bigram) for bigram in lyrics_bigrams]
+  
+  # LDA model
+  lda_model = gensim.models.ldamodel.LdaModel(corpus=corpus,
+                                          id2word=id2word,
+                                          num_topics=n_topics, 
+                                          random_state=1,
+                                          update_every=1,
+                                          chunksize=100,
+                                          passes=20,
+                                          alpha='auto',
+                                          per_word_topics=True)
+  
+  # Perplexity: measure of model performance (the lower the value the better the performance)
+  print('Perplexity: ', lda_model.log_perplexity(corpus))
+  coherence_model_lda = CoherenceModel(model=lda_model, 
+                                       texts=lyrics_bigrams, 
+                                       dictionary=id2word, 
+                                       coherence='c_v')
+  
+  # Coherence: measure of interpretability
+  coherence_lda = coherence_model_lda.get_coherence()
+  print('Coherence Score: ', coherence_lda)
+  
+  topic_nums = []
+  words = []
+  
+  # Create list of topics and nested list of words for data frame
+  for index, topic in lda_model.show_topics(formatted=False, 
+                                        num_words=top_n_words,
+                                        num_topics=n_topics):
+    topic_nums.append(index)
+    words.append([word[0] for word in topic])
+  
+  # Initial data frame -- formatting needed
+  init_df = pd.DataFrame({'Topic':topic_nums,
+                    'Words': words})
+  
+  # Split "Word" column into len(top_n_words) columns
+  split_words_df = pd.DataFrame(init_df['Words'].to_list(), 
+                            columns=['Word ' + str(i) for i in range(top_n_words)])
+  split_words_df['Topic'] = topic_nums
+  
+  # Reorder the columns (Topic first)
+  cols = split_words_df.columns.tolist()
+  cols = cols[-1:] + cols[:-1]
+  
+  # Final LDA column
+  LDA_df = split_words_df[cols]
+  
+  return LDA_df
+
+```
+
+```{python}
+LDA_topics(cleaned_full_df)
+```
+
+```{python}
+LDA_topics(cleaned_rap_df)
+```
+
+```{python}
+LDA_topics(cleaned_rock_df)
+```
+
+```{python}
+LDA_topics(cleaned_pop_df)
+```
+
+```{python}
+LDA_topics(cleaned_rb_df)
+```
+
+```{python}
+LDA_topics(cleaned_country_df)
+```
+
+# Advanced Topic Modeling
+
+## Bert
+
+### Bert Description
+
+Another approach to topic modeling is BERTopic. This is a transformer based model that creates dense clusters allowing us to create interpretable topics that include important words to these topics. Transformers are nice tools to use because they use models that are already created for us and fine tune them to our data. This helps because oftentimes the data that we have isn't large enough to train a whole model and we also generally don't have access to powerful enough GPU's to train these models.
+
+The way that BERT works is by converting the text documents into numerical data using the transformers. The embedded pre-trained models are now updated and fine tuned with the data that we include. We can use sentence-transformers to carry this out.
+
+After transforming the data with the pre-trained models, we want to do some clustering to get the documents with similar topics to cluster together. First to deal with high dimensionality in clustering, we want to reduce the dimensionality finding the right balance between too low, lost information, and too high poor clustering. Once we have a lowered dimensionality we can make our clusters which will end up being the topics that we are looking for. Popular choices for carrying out this clustering are UMAP for reducing the dimensionality and HDBSAN for forming the clusters.
+
+After forming these clusters the next obvious step is to figure out what these clusters represent, with this we are basically comparing the importance of the words between the different documents. A common way to do this is with TF-IDF, and in this case clustered TF-IDF. Instead of looking at the importance of each word compared to its document, you take the clustered documents and look at the importance of the word within the cluster of documents where it appears. With these importances we can get the top 20 or so scores for words which would give us a good idea of the topic that we are looking at.
+
+There are a couple of common issues that people run into when carrying out BERTopic modeling. For example, a lot of transformers have limits on the size of documents so we might have to split documents down into paragraphs, or in the case of songs down into verses. Another issue is that in the end we might end up with a lot of clusters so we would have to do some topic reduction. To do this we would adjust the min_cluster_size in HDBSAN to ensure that we have less topics which would end up being more meaningful.
+
+-   <https://towardsdatascience.com/topic-modeling-with-bert-779f7db187e6>
+-   <https://maartengr.github.io/BERTopic/index.html>
+-   <https://towardsdatascience.com/an-introduction-to-transformers-and-hugging-face-13052ec9d72d>
+-   <https://hackernoon.com/nlp-tutorial-topic-modeling-in-python-with-bertopic-372w35l9>
+-   <https://maartengr.github.io/BERTopic/index.html>
+
+I.  Generates a representation vector for each document.
+II. UMAP algorithm reduces the dimensions that each vector has.
+III. HDBSCAN algorithm is used for the clustering process.
+IV. c-TF-IDF algorithm retrieves the most relevant words for each topic.
+V.  Maximize Candidate Relevance algorithm is used to maximize diversity.
+
+```{python}
+from sentence_transformers import SentenceTransformer
+from umap import UMAP
+from hdbscan import HDBSCAN
+from sklearn.feature_extraction.text import CountVectorizer
+from bertopic.vectorizers import ClassTfidfTransformer
+from bertopic import BERTopic
+import random
+import plotly.io as pio
+```
+
+We were able to implement this code in time - BERTopic models take a very long time
+
+```{python}
+data = cleaned_full_df.lyrics.to_list()
+datasmall = data
+#datasmall = random.sample(data, 200)
+```
+
+### Topic Visualization
+
+```{python}
+topic_model = BERTopic() # create model 
+model = BERTopic(nr_topics=20) # specify dimensions
+topics, probs = model.fit_transform(datasmall) # fit model
+```
+
+```{python}
+# Get top 10 topics and the associated words
+model.get_topic(1)
+model.get_topic(2)
+model.get_topic(3)
+```
+
+```{python}
+pio.show(model.visualize_topics()) # Inter-topic distance map
+```
+
+```{python}
+pio.show(model.visualize_barchart()) # visualize topics with top words
+```
+
+```{python}
+pio.show(model.visualize_heatmap()) # Visual topic similarity
+```
+
+# Extra Functions to expand dataset creation
+
+-   With minimum work you could greatly expand the possibilities of dataset creation
+-   The greatest challenge is dealing with scale as random terminations continually occur as you automate the API calls, and sometimes even the try/except/pass cheat code won't save you
+-   Also Genius may just suspend your access token for some time if you're making too many API calls
+-   Try to use this code and edit it so that you use the genius agent (genius.song(song)) (API calls) as little as possible
+-   Yet this is tricky if you want a lyric dataset because albums can be search with song ids, but the returned info does not include lyrics.
+-   Best approach so far: Use top_charts() to get dataframe, use the song ids to get the album for each song, get all songs ids for each album, then finally use that final list of song ids to retrieve song_lyrics
+-   So with the the functions provided, first call top_charts(), then call album_songs() with the top chart songs ids, and then once you've collected enough albums/songs call song_info with the complete list of song ids
+-   The make_dataset is an incomplete attempt to make a super - function to condense code and to automate as much as possible . It will run and begin to automate the whole process, but there is an index error in that is doesn't know when to stop and will terminate the process. Could possibly be fixed in very little time.
+
+```{python}
+def album_songs(song_ids):
+  # Takes in a list of song ids and return a df of every song in each on the input songs' album
+  albums = list()         
+  songs = list()         
+  artists = list()
+  new_song_ids = list()
+  for song in song_ids:
+    t = True
+    while t == True:
+      try:
+        # Search song API with parameters
+        song_info = genius.song(song)
+      except:    
+        pass
+      else:
+        t = False
+        if song_info['song']['album'] != None:
+          album_id = song_info['song']['album']['id']
+          album_name = song_info['song']['album']['name']
+          album_artist = song_info['song']['artist_names']
+      t = True
+      while t == True:
+        try:
+          # Search song API with parameters
+          album_dict = genius.album_tracks(album_id)
+        except:    
+          pass
+        else:
+          t = False
+          len_album = len(album_dict['tracks'])
+          for track in range(len_album):
+              song_id = album_dict['tracks'][track]['song']['id']
+              song_name = album_dict['tracks'][track]['song']['title']
+              artists.append(album_artist)
+              albums.append(album_name)
+              songs.append(song_name)
+              new_song_ids.append(song_id)
+  df = pd.DataFrame({'song': songs, 'album':albums,'artist':artists,'song_ids':new_song_ids})
+  return df
+```
+
+```{python}
+def make_dataset(genre, time_period = 'all_time',n_per_page=20, pages=1):
+  
+  df =top_charts(genre='all',time_period=time_period,n_per_page=n_per_page,pages=2)
+  
+  df = album_songs(df['song_ids'])
+  
+  myDict = {k: v for k, v in zip(df['song_ids'], df['album'])}
+  df = song_info(df['song_ids'])
+  
+  new_albums = list()
+  for i in df['song_ids']:
+    for j in myDict.keys():
+      if i == j:
+        new_albums.append(myDict.get(j))
+        
+  df = pd.concat([df, 
+                pd.Series(new_albums, name = 'album',dtype='float64')], axis=1)
+  csv_name = 'topcharts_'+time_period+genre
+  path = os.getcwd()
+  df.to_csv(path+csv_name+'.csv')
+  return df
+```
+
+# Additional Links
+
+-   <https://medium.com/compassred-data-blog/top-3-things-to-make-your-rmarkdown-better-part-1-a137f78315b9>
+    -   Styling Rmarkdown
+-   <https://www.rstudio.com/wp-content/uploads/2015/03/rmarkdown-reference.pdf>
+    -   Download link for comprehensive RMarkdown reference sheet
+-   <https://www.rstudio.com/wp-content/uploads/2015/02/rmarkdown-cheatsheet.pdf>
+    -   Download link for rmarkdown cheat-sheet
+-   [http://snowball.tartarus.org/algorithms/english/stemmer.htm](http://snowball.tartarus.org/algorithms/english/stemmer.html)l
+    -   Additional info for Snowball package (The English (Porter2) stemming algorithm)
+-   <https://towardsdatascience.com/text-classification-with-state-of-the-art-nlp-library-flair-b541d7add21f>
+    -   Flair implementation for text classification
+
+    -   
+-   <https://www.jmlr.org/papers/volume3/blei03a/blei03a.pdf>
+    -   original LDA paper
